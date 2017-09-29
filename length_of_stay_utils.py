@@ -1,6 +1,6 @@
-import pyodbc
+
 from scipy.ndimage import imread
-import tensorflow as tf
+
 from revoscalepy import RxSqlServerData, rx_import, RxOdbcData, rx_write_object, rx_serialize_model, rx_read_object
 from collections import OrderedDict
 import numpy as np
@@ -12,33 +12,33 @@ def display_head(table_name, n_rows):
 
 
 def detect_table(table_name, connection_string):
-    detect_sql = RxSqlServerData(sql_query="IF EXISTS (select 1 from information_schema.tables where table_name = '{}') SELECT 1 ELSE SELECT 0".format(table_name),
+    detect_sql = RxSqlServerData(sql_query="IF EXISTS (select 1 from information_schema.tables where table_name = '{}') SELECT 1 AS ret FROM LengthOfStay ELSE SELECT 0 AS ret FROM LengthOfStay".format(table_name),
                                  connection_string=connection_string)
     does_exist = rx_import(detect_sql)
     if does_exist.iloc[0,0] == 1: return True
     else: return False
 
 ## this is not used 
-def drop_view(view_name, connection_string):
-    pyodbc_cnxn = pyodbc.connect(connection_string)
-    pyodbc_cursor = pyodbc_cnxn.cursor()
-    pyodbc_cursor.execute("IF OBJECT_ID ('{}', 'V') IS NOT NULL DROP VIEW {} ;".format(view_name, view_name))
-    pyodbc_cursor.close()
-    pyodbc_cnxn.commit()
-    pyodbc_cnxn.close()
+#def drop_view(view_name, connection_string):
+#    pyodbc_cnxn = pyodbc.connect(connection_string)
+#    pyodbc_cursor = pyodbc_cnxn.cursor()
+#    pyodbc_cursor.execute("IF OBJECT_ID ('{}', 'V') IS NOT NULL DROP VIEW {} ;".format(view_name, view_name))
+#    pyodbc_cursor.close()
+#    pyodbc_cnxn.commit()
+#    pyodbc_cnxn.close()
 
 ## this is not used anywhere in the template
-def alter_column(table, column, data_type, connection_string):
-    pyodbc_cnxn = pyodbc.connect(connection_string)
-    pyodbc_cursor = pyodbc_cnxn.cursor()
-    pyodbc_cursor.execute("ALTER TABLE {} ALTER COLUMN {} {};".format(table, column, data_type))
-    pyodbc_cursor.close()
-    pyodbc_cnxn.commit()
-    pyodbc_cnxn.close()
+#def alter_column(table, column, data_type, connection_string):
+#    pyodbc_cnxn = pyodbc.connect(connection_string)
+#    pyodbc_cursor = pyodbc_cnxn.cursor()
+#    pyodbc_cursor.execute("ALTER TABLE {} ALTER COLUMN {} {};".format(table, column, data_type))
+#    pyodbc_cursor.close()
+#    pyodbc_cnxn.commit()
+#    pyodbc_cnxn.close()
 
 
 def get_num_rows(table, connection_string):
-    count_sql = RxSqlServerData(sql_query="SELECT COUNT(*) FROM {};".format(table), connection_string=connection_string)
+    count_sql = RxSqlServerData(sql_query="SELECT COUNT(*) AS count FROM {};".format(table), connection_string=connection_string)
     count = rx_import(count_sql)
     count = count.iloc[0,0]
     return count
@@ -54,23 +54,28 @@ def create_formula(response, features, to_remove=None):
 
 
 def train_test_split(id, table, train_table, p, connection_string):
-    from revoscalepy import rx_set_temp_compute_context, RxInSqlServer, rx_data_step
-    with rx_set_temp_compute_context(RxInSqlServer(connection_string= connection_string)) :
-       data = RxSqlServerData("SELECT {} FROM {} WHERE ABS(CAST(CAST(HashBytes('MD5', CAST({} AS varchar(10))) AS VARBINARY(64)) AS BIGINT) % 100) < {};".format(id, table, id, p),
-                              string_as_factors = True, connection_string = connection_string)
-       train_table = RxSqlServerData(table = train_table, string_as_factors = True)
-       rx_data_step(input_data = data, out_file = train_table, overwrite = True)
+    from revoscalepy import rx_set_temp_compute_context, RxInSqlServer, rx_data_step, RxLocalSeq
+
+    def transform(data,compute_context):
+        return data
+
+
+    data = RxSqlServerData(sql_query = "SELECT {} FROM {} WHERE ABS(CAST(CAST(HashBytes('MD5', CAST({} AS varchar(10))) AS VARBINARY(64)) AS BIGINT) % 100) < {};".format(id, table, id, p),
+                          connection_string = connection_string)
+    train_table_dest = RxSqlServerData(table = 'Train_Id', connection_string = connection_string)
+    rx_data_step(input_data = data, output_file = train_table_dest, overwrite = True, transform_function = transform)
+    print("Created {}".format(train_table))
 
 
 def write_rts_model(model, key, connection_string):
     RTS_odbc = RxOdbcData(connection_string, table="RTS")
     serialized_model = rx_serialize_model(model, realtime_scoring_only=True)
-    rx_write_object(RTS_odbc, key=key, value=serialized_model, serialize=False, compress=None, overwrite=True)
+    rx_write_object(RTS_odbc, key=key, value=serialized_model, serialize=False, compress=None, overwrite = True)
 
 
 def insert_model(classifier, name, connection_string):
     classifier_odbc = RxOdbcData(connection_string, table="Models")
-    rx_write_object(classifier_odbc, key=name, value=classifier, serialize=True, overwrite=True)
+    rx_write_object(classifier_odbc, key=name, value=classifier, serialize=True, overwrite = True)
 
 
 def retrieve_model(connection_string, name):
